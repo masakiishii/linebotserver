@@ -26,13 +26,22 @@ source-repository head
 
 library
   exposed-modules:
-      Lib
+                  MMServer
+                , Executor
+                , KeyReader
+                , Data.Receive.ReceiveHook
+                , Data.Receive.EventData
+                , Data.Receive.ReceiveMessageData
+                , Data.Receive.SourceData
+                , Data.Send.SendMessageData
+                , Data.Send.SendHook
   other-modules:
       Paths_linebotserver
   hs-source-dirs:
       src
   build-depends:
                 base >=4.7 && <5
+              , aeson
               , base-compat
               , aeson-compat
               , mtl
@@ -45,15 +54,16 @@ library
               , wai
               , warp
               , warp-tls
+              , cassava
               , servant
               , servant-server
-              , servant-lucid
-              , lucid
+              , servant-client
+              , http-client
+              , http-client-tls
               , directory
               , text
-              , cassava
-              , blaze-markup
-              , blaze-html
+              , vector
+              , network
   default-language: Haskell2010
 
 executable linebotserver-exe
@@ -66,6 +76,7 @@ executable linebotserver-exe
   build-depends:
                 base >=4.7 && <5
               , linebotserver
+              , aeson
               , base-compat
               , aeson-compat
               , mtl
@@ -100,7 +111,7 @@ test-suite linebotserver-test
   build-depends:
                 base >=4.7 && <5
               , linebotserver
-              , linebotserver
+              , aeson
               , base-compat
               , aeson-compat
               , mtl
