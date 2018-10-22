@@ -49,6 +49,8 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import KeyReader
 import Executor
 
+import System.Process
+
 type LineReceiveAPI = "webhook"
                 :> Header "X-Line-Signature" T.Text
                 :> ReqBody '[JSON] ReceiveHook
@@ -70,8 +72,20 @@ makeBody :: ReceiveHook -> SendHook
 makeBody receiveHook =
   SendHook { Data.Send.SendHook.replyToken = rToken, Data.Send.SendHook.messages = msges }
   where
-    rToken = Data.Receive.EventData.replyToken (head $ Data.Receive.ReceiveHook.events receiveHook)
-    msges = [SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = "hi, user! May I help you?" }]
+    headEvent = head $ Data.Receive.ReceiveHook.events receiveHook
+    rToken = Data.Receive.EventData.replyToken headEvent
+    messageData = Data.Receive.EventData.message headEvent
+    msges = case messageData of
+      Nothing -> [SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = "hi, user! May I help you?" }]
+      Just x -> let m = Data.Receive.ReceiveMessageData.text x
+                in [SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = makeMessage m }]
+
+makeMessage :: String -> String
+makeMessage msg
+  | msg == "1" || msg == "start" = "Sure!, Let's execute M&Ms!"
+  | msg == "2" || msg == "stop" = "It's Okey!, try to stop M&Ms..."
+  | msg == "3" || msg == "position" = "Sure!, let me see... Here!, it's your P&L!"
+  | otherwise = "hi, user! May I help you?"
 
 executeReply :: Manager -> T.Text -> ReceiveHook -> IO ()
 executeReply manager lineToken receiveHook = do
