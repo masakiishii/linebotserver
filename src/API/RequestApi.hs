@@ -35,7 +35,7 @@ type ClientAPI = "v2" :> "bot" :> "message" :> "reply"
                 :> Header "ACCESS-KEY" T.Text
                 :> Header "ACCESS-TIMESTAMP" T.Text
                 :> Header "ACCESS-SIGN" T.Text
-                :> Get '[JSON] CollateralData      
+                :> Get '[JSON] CollateralData
 
 lineSendApi :: Proxy ClientAPI
 lineSendApi = Proxy
