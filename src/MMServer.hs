@@ -1,73 +1,30 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeOperators #-}
 
 module MMServer where
 
-import Prelude ()
-import Prelude.Compat
-
-import Control.Monad.Except
 import Control.Monad.Reader
-import Data.Aeson.Compat
-import Data.Aeson.Types
-import Data.Attoparsec.ByteString
-import Data.ByteString (ByteString)
-import Data.List
-import Data.Maybe
-import Data.String.Conversions
-import Data.Time.Calendar
-import GHC.Generics
-import Network.HTTP.Media ((//), (/:))
-import Network.Wai
+import Control.Concurrent
 import Network.Wai.Handler.Warp
-import Network.Wai.Handler.WarpTLS
 import Servant
-import Servant.Client
-import System.Directory
-import qualified Data.Aeson.Parser
-
+import System.Process
 import qualified Data.Text as T
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Char8 as BS
+import Network.HTTP.Client (newManager, Manager)
+import Network.HTTP.Client.TLS (tlsManagerSettings)
+
 import Data.Receive.ReceiveHook
 import Data.Receive.ReceiveMessageData
 import Data.Receive.EventData
 import Data.Receive.SourceData
 import Data.Send.SendHook
 import Data.Send.SendMessageData
-
-import qualified Data.ByteString.Lazy as BL
-import qualified Data.Text as T
-import qualified Data.ByteString.Char8 as BS
-import Network.HTTP.Client (newManager, Manager)
-import Network.HTTP.Client.TLS (tlsManagerSettings)
+import Data.Send.PushData
+import Data.Position.CollateralData
+import API.RequestApi
+import RequestBuilder
 import KeyReader
 import Executor
-
-import System.Process
-import Control.Concurrent
-
-type LineReceiveAPI = "webhook"
-                :> Header "X-Line-Signature" T.Text
-                :> ReqBody '[JSON] ReceiveHook
-                :> Post '[JSON] NoContent
-
-type LineSendAPI = "v2" :> "bot" :> "message" :> "reply"
-                :> Header "Content-Type" T.Text
-                :> Header "Authorization" T.Text
-                :> ReqBody '[JSON] SendHook
-                :> Post '[JSON] NoContent
-
-lineSendApi :: Proxy LineSendAPI
-lineSendApi = Proxy
-
-putMessage :: Maybe T.Text -> Maybe T.Text -> SendHook ->  ClientM NoContent
-putMessage = client lineSendApi
 
 makeBody :: ReceiveHook -> SendHook
 makeBody receiveHook =
@@ -110,9 +67,9 @@ executeScript receiveMsg =
 executeScriptDone :: String -> IO ()      
 executeScriptDone msg
   | msg == "1" || msg == "start" = do
-    r <- createProcess (proc "./start-socket-io.sh" [])
-    threadDelay (12 * 1000 * 1000)
     _ <- forkIO $ do
+      r <- createProcess (proc "./start-socket-io.sh" [])
+      threadDelay (12 * 1000 * 1000)
       r1 <- createProcess (proc "./purified-trader-exe" ["--start"])
       return ()
     return ()
@@ -131,11 +88,6 @@ lineReceiveServer manager lineToken = receiveMessage
                 evHead = head evs
                 src = Data.Receive.EventData.source evHead
                 message = Data.Receive.EventData.message evHead
-            liftIO $ print $ length evs
-            liftIO $ print lineToken
-            liftIO $ print $ Data.Receive.EventData.replyToken evHead
-            liftIO $ print $ Data.Receive.EventData.typeString evHead
-            liftIO $ print $ Data.Receive.EventData.timestamp evHead
             liftIO $ executeScript message
             liftIO $ executeReply manager lineToken receiveHook
             return NoContent
@@ -153,4 +105,32 @@ bootServer = do
   let keys = readKeyData csvData
       lineToken = T.pack $ "Bearer " ++ keys!!0
       channelSecretKey = T.pack $ keys!!1
+      userId = keys!!2
+      accessKey = T.pack $ keys!!3
+      secretKey = BS.pack $ keys!!4
+  _ <- forkIO $ sendPosition manager lineToken userId accessKey secretKey
   run 8081 (lineApplication manager lineToken)
+
+sendPosition :: Manager -> T.Text -> String -> T.Text -> BS.ByteString -> IO ()
+sendPosition manager lineToken userId accessKey secretKey =
+  flip fix (0 :: Int) $ \loop i ->
+  when True $ do
+    req <- buildCollateralReq accessKey secretKey
+    ret <- executeBit manager $ req
+    case ret of
+      Left x-> do loop $ i
+      Right x -> do
+        colBase <- readBaseCollateral
+        let col = Data.Position.CollateralData.collateral x
+            pl = col - colBase
+            textMsg = "Today's PL is: " ++ show (pl)
+            msg = SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = textMsg }
+            body = PushData { toUserId = userId, Data.Send.PushData.messages = [msg] }
+        res <- execute manager $ pushMessage (Just "application/json") (Just lineToken) body
+        threadDelay (5 * 60 * 1000 * 1000)
+        loop $ i
+
+readBaseCollateral :: IO Integer
+readBaseCollateral = do
+  col <- readFile "baseCollateral.txt"
+  return $ (read col :: Integer)
