@@ -50,6 +50,7 @@ import KeyReader
 import Executor
 
 import System.Process
+import Control.Concurrent
 
 type LineReceiveAPI = "webhook"
                 :> Header "X-Line-Signature" T.Text
@@ -79,7 +80,7 @@ makeBody receiveHook =
       Nothing -> [SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = "hi, user! May I help you?" }]
       Just x -> let m = Data.Receive.ReceiveMessageData.text x
                 in [SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = makeMessage m }]
-
+                
 makeMessage :: String -> String
 makeMessage msg
   | msg == "1" || msg == "start" = "Sure!, Let's execute M&Ms!"
@@ -97,6 +98,30 @@ executeReply manager lineToken receiveHook = do
     Left e -> print e
     Right t -> print t
 
+executeScript :: Maybe ReceiveMessageData -> IO ()
+executeScript receiveMsg =
+  case receiveMsg of
+    Nothing -> return ()
+    Just msg -> do
+      let textMsg = Data.Receive.ReceiveMessageData.text msg
+      executeScriptDone textMsg
+      return ()
+
+executeScriptDone :: String -> IO ()      
+executeScriptDone msg
+  | msg == "1" || msg == "start" = do
+    r <- createProcess (proc "./start-socket-io.sh" [])
+    threadDelay (12 * 1000 * 1000)
+    _ <- forkIO $ do
+      r1 <- createProcess (proc "./purified-trader-exe" ["--start"])
+      return ()
+    return ()
+  | msg == "2" || msg == "stop" = do
+    r <- createProcess (proc "./stop-socket-io.sh" [])
+    return ()
+  | msg == "3" || msg == "position" = return () -- TODO
+  | otherwise = return () -- TODO
+
 lineReceiveServer :: Manager -> T.Text -> Server LineReceiveAPI
 lineReceiveServer manager lineToken = receiveMessage
   where receiveMessage :: Maybe T.Text -> ReceiveHook -> Handler NoContent
@@ -105,11 +130,13 @@ lineReceiveServer manager lineToken = receiveMessage
             let evs = Data.Receive.ReceiveHook.events receiveHook
                 evHead = head evs
                 src = Data.Receive.EventData.source evHead
+                message = Data.Receive.EventData.message evHead
             liftIO $ print $ length evs
             liftIO $ print lineToken
             liftIO $ print $ Data.Receive.EventData.replyToken evHead
             liftIO $ print $ Data.Receive.EventData.typeString evHead
             liftIO $ print $ Data.Receive.EventData.timestamp evHead
+            liftIO $ executeScript message
             liftIO $ executeReply manager lineToken receiveHook
             return NoContent
 
@@ -127,4 +154,3 @@ bootServer = do
       lineToken = T.pack $ "Bearer " ++ keys!!0
       channelSecretKey = T.pack $ keys!!1
   run 8081 (lineApplication manager lineToken)
-
