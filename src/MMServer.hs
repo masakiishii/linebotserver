@@ -26,8 +26,8 @@ import RequestBuilder
 import KeyReader
 import Executor
 
-makeBody :: ReceiveHook -> SendHook
-makeBody receiveHook =
+makeBody :: ReceiveHook -> String -> SendHook
+makeBody receiveHook msg =
   SendHook { Data.Send.SendHook.replyToken = rToken, Data.Send.SendHook.messages = msges }
   where
     headEvent = head $ Data.Receive.ReceiveHook.events receiveHook
@@ -36,51 +36,52 @@ makeBody receiveHook =
     msges = case messageData of
       Nothing -> [SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = "hi, user! May I help you?" }]
       Just x -> let m = Data.Receive.ReceiveMessageData.text x
-                in [SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = makeMessage m }]
+                in [SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = msg }]
                 
-makeMessage :: String -> String
-makeMessage msg
-  | msg == "1" || msg == "start" = "Sure!, Let's execute M&Ms!"
-  | msg == "2" || msg == "stop" = "It's Okey!, try to stop M&Ms..."
-  | msg == "3" || msg == "position" = "Sure!, let me see... Here!, it's your P&L!"
-  | otherwise = "hi, user! May I help you?"
-
-executeReply :: Manager -> T.Text -> ReceiveHook -> IO ()
-executeReply manager lineToken receiveHook = do
+executeReply :: Manager -> T.Text -> ReceiveHook -> String -> IO ()
+executeReply manager lineToken receiveHook msg = do
   print "reply message"
-  let body = makeBody receiveHook
+  let body = makeBody receiveHook msg
   print body
   res <- execute manager $ putMessage (Just "application/json") (Just lineToken) body
   case res of
     Left e -> print e
     Right t -> print t
 
-executeScript :: Maybe ReceiveMessageData -> IO ()
-executeScript receiveMsg =
+executeScript :: Maybe ReceiveMessageData -> Manager -> T.Text -> BS.ByteString -> IO String
+executeScript receiveMsg manager accessKey secretKey =
   case receiveMsg of
-    Nothing -> return ()
+    Nothing -> return $ "Error occured!"
     Just msg -> do
       let textMsg = Data.Receive.ReceiveMessageData.text msg
-      executeScriptDone textMsg
-      return ()
+      executeScriptDone textMsg manager accessKey secretKey
 
-executeScriptDone :: String -> IO ()      
-executeScriptDone msg
+executeScriptDone :: String -> Manager -> T.Text -> BS.ByteString -> IO String
+executeScriptDone msg manager accessKey secretKey
   | msg == "1" || msg == "start" = do
     _ <- forkIO $ do
       r <- createProcess (proc "./start-socket-io.sh" [])
       threadDelay (12 * 1000 * 1000)
       r1 <- createProcess (proc "./purified-trader-exe" ["--start"])
       return ()
-    return ()
+    return $ "Sure!, Let's execute M&Ms!"
   | msg == "2" || msg == "stop" = do
     r <- createProcess (proc "./stop-socket-io.sh" [])
-    return ()
-  | msg == "3" || msg == "position" = return () -- TODO
-  | otherwise = return () -- TODO
+    return $ "It's Okey!, try to stop M&Ms..."
+  | msg == "3" || msg == "position" = do
+    req <- buildCollateralReq accessKey secretKey
+    ret <- executeBit manager $ req
+    case ret of
+      Left x-> return $ "Error! Please Retry!" ++ show(x)
+      Right x -> do
+        colBase <- readBaseCollateral
+        let col = Data.Position.CollateralData.collateral x
+            pl = col - colBase
+        return $ "Sure!, let me see... Here!, it's your P&L! " ++ "Today's PL is: " ++ show (pl)
+  | otherwise = return $ "hi, user! May I help you?"
 
-lineReceiveServer :: Manager -> T.Text -> Server LineReceiveAPI
-lineReceiveServer manager lineToken = receiveMessage
+lineReceiveServer :: Manager -> T.Text -> T.Text -> BS.ByteString -> Server LineReceiveAPI
+lineReceiveServer manager lineToken accessKey secretKey = receiveMessage
   where receiveMessage :: Maybe T.Text -> ReceiveHook -> Handler NoContent
         receiveMessage signature receiveHook =
           do
@@ -88,15 +89,15 @@ lineReceiveServer manager lineToken = receiveMessage
                 evHead = head evs
                 src = Data.Receive.EventData.source evHead
                 message = Data.Receive.EventData.message evHead
-            liftIO $ executeScript message
-            liftIO $ executeReply manager lineToken receiveHook
+            msg <- liftIO $ executeScript message manager accessKey secretKey
+            liftIO $ executeReply manager lineToken receiveHook msg
             return NoContent
 
 lineReceiveApi :: Proxy LineReceiveAPI
 lineReceiveApi = Proxy
 
-lineApplication :: Manager -> T.Text -> Application
-lineApplication manager lineToken = serve lineReceiveApi (lineReceiveServer manager lineToken)
+lineApplication :: Manager -> T.Text -> T.Text -> BS.ByteString -> Application
+lineApplication manager lineToken accessKey secretKey = serve lineReceiveApi (lineReceiveServer manager lineToken accessKey secretKey)
 
 bootServer :: IO ()
 bootServer = do
@@ -109,12 +110,13 @@ bootServer = do
       accessKey = T.pack $ keys!!3
       secretKey = BS.pack $ keys!!4
   _ <- forkIO $ sendPosition manager lineToken userId accessKey secretKey
-  run 8081 (lineApplication manager lineToken)
+  run 8081 (lineApplication manager lineToken accessKey secretKey)
 
 sendPosition :: Manager -> T.Text -> String -> T.Text -> BS.ByteString -> IO ()
 sendPosition manager lineToken userId accessKey secretKey =
   flip fix (0 :: Int) $ \loop i ->
   when True $ do
+    threadDelay (5 * 60 * 1000 * 1000)
     req <- buildCollateralReq accessKey secretKey
     ret <- executeBit manager $ req
     case ret of
@@ -127,7 +129,6 @@ sendPosition manager lineToken userId accessKey secretKey =
             msg = SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = textMsg }
             body = PushData { toUserId = userId, Data.Send.PushData.messages = [msg] }
         res <- execute manager $ pushMessage (Just "application/json") (Just lineToken) body
-        threadDelay (5 * 60 * 1000 * 1000)
         loop $ i
 
 readBaseCollateral :: IO Integer

@@ -11,8 +11,8 @@ import GHC.Generics
 data CollateralData = CollateralData
     {
       collateral :: Integer
-    , openPositionPnL :: Integer
-    , requireCollateral :: Integer
+    , openPositionPnL :: Double
+    , requireCollateral :: Double
     , keepRate :: Double
     } deriving (Show, Generic)
 
