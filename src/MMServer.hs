@@ -60,13 +60,13 @@ executeScriptDone :: String -> Manager -> T.Text -> BS.ByteString -> IO String
 executeScriptDone msg manager accessKey secretKey
   | msg == "1" || msg == "start" = do
     _ <- forkIO $ do
-      r <- createProcess (proc "./start-socket-io.sh" [])
-      threadDelay (12 * 1000 * 1000)
-      r1 <- createProcess (proc "./purified-trader-exe" ["--start"])
+      r <- createProcess (proc "./start-trader.sh" [])
+      --threadDelay (12 * 1000 * 1000)
+      --r1 <- createProcess (proc "./purified-trader-exe" ["--start"])
       return ()
     return $ "Sure!, Let's execute M&Ms!"
   | msg == "2" || msg == "stop" = do
-    r <- createProcess (proc "./stop-socket-io.sh" [])
+    r <- createProcess (proc "./stop-trader.sh" [])
     return $ "It's Okey!, try to stop M&Ms..."
   | msg == "3" || msg == "position" = do
     req <- buildCollateralReq accessKey secretKey
@@ -76,8 +76,9 @@ executeScriptDone msg manager accessKey secretKey
       Right x -> do
         colBase <- readBaseCollateral
         let col = Data.Position.CollateralData.collateral x
+            openpl = Data.Position.CollateralData.openPositionPnL x
             pl = col - colBase
-        return $ "Sure!, let me see... Here!, it's your P&L! " ++ "Today's PL is: " ++ show (pl)
+        return $ "Sure!, let me see... Here!, it's your P&L! " ++ "Today's PL is: " ++ show (pl) ++ ", and Open position PL is: " ++ show(openpl)
   | otherwise = return $ "hi, user! May I help you?"
 
 lineReceiveServer :: Manager -> T.Text -> T.Text -> BS.ByteString -> Server LineReceiveAPI
