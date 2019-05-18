@@ -7,6 +7,7 @@ import Control.Concurrent
 import Network.Wai.Handler.Warp
 import Servant
 import System.Process
+import System.IO
 import qualified Data.Text as T
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as BS
@@ -61,8 +62,6 @@ executeScriptDone msg manager accessKey secretKey
   | msg == "1" || msg == "start" = do
     _ <- forkIO $ do
       r <- createProcess (proc "./start-trader.sh" [])
-      --threadDelay (12 * 1000 * 1000)
-      --r1 <- createProcess (proc "./purified-trader-exe" ["--start"])
       return ()
     return $ "Sure!, Let's execute M&Ms!"
   | msg == "2" || msg == "stop" = do
@@ -79,20 +78,27 @@ executeScriptDone msg manager accessKey secretKey
             openpl = Data.Position.CollateralData.openPositionPnL x
             pl = col - colBase
         return $ "Sure!, let me see... Here!, it's your P&L! " ++ "Today's PL is: " ++ show (pl) ++ ", and Open position PL is: " ++ show(openpl)
-  | otherwise = return $ "hi, user! May I help you?"
-
-lineReceiveServer :: Manager -> T.Text -> T.Text -> BS.ByteString -> Server LineReceiveAPI
-lineReceiveServer manager lineToken accessKey secretKey = receiveMessage
-  where receiveMessage :: Maybe T.Text -> ReceiveHook -> Handler NoContent
-        receiveMessage signature receiveHook =
-          do
-            let evs = Data.Receive.ReceiveHook.events receiveHook
-                evHead = head evs
-                src = Data.Receive.EventData.source evHead
-                message = Data.Receive.EventData.message evHead
-            msg <- liftIO $ executeScript message manager accessKey secretKey
-            liftIO $ executeReply manager lineToken receiveHook msg
-            return NoContent
+  | msg == "4" = do
+    _ <- forkIO $ do
+      r <- createProcess (proc "./start-feeder.sh" [])
+      return ()
+    return $ "Sure!, Let's start feeder!"
+  | msg == "5" = do
+    r <- createProcess (proc "./stop-feeder.sh" [])
+    return $ "It's Okey!, try to stop feeder..."
+  | msg == "6" = checkProcess "./check-trade-process.sh"
+  | msg == "7" = checkProcess "./check-feed-process.sh"    
+  | otherwise = return $ unlines [
+    "hi, user! May I help you?",
+    "1: start trade",
+    "2: stop  trade",
+    "3: check position PL",
+    "4: start feeder",
+    "5: stop  feeder",
+    "6: check trade process",
+    "7: check feed  process",
+    "otherwise: menu"
+    ]
 
 lineReceiveApi :: Proxy LineReceiveAPI
 lineReceiveApi = Proxy
@@ -124,15 +130,38 @@ sendPosition manager lineToken userId accessKey secretKey =
       Left x-> do loop $ i
       Right x -> do
         colBase <- readBaseCollateral
+        feederProcess <- checkProcess "./check-feed-process.sh"
+        tradeProcess <- checkProcess "./check-trade-process.sh"
         let col = Data.Position.CollateralData.collateral x
             pl = col - colBase
             textMsg = "Today's PL is: " ++ show (pl)
-            msg = SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = textMsg }
-            body = PushData { toUserId = userId, Data.Send.PushData.messages = [msg] }
+            msg1 = SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = textMsg }
+            msg2 = SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = feederProcess }
+            msg3 = SendMessageData { Data.Send.SendMessageData.typeString = "text", Data.Send.SendMessageData.text = tradeProcess }
+            body = PushData { toUserId = userId, Data.Send.PushData.messages = [msg1, msg2, msg3] }
         res <- execute manager $ pushMessage (Just "application/json") (Just lineToken) body
         loop $ i
+
+checkProcess :: String -> IO String
+checkProcess shellPath = do
+  (_, Just hout, _, _) <- createProcess (proc shellPath []) { std_out = CreatePipe }
+  result <- hGetContents hout
+  return $ filter (/= '\n') result
 
 readBaseCollateral :: IO Integer
 readBaseCollateral = do
   col <- readFile "baseCollateral.txt"
   return $ (read col :: Integer)
+
+lineReceiveServer :: Manager -> T.Text -> T.Text -> BS.ByteString -> Server LineReceiveAPI
+lineReceiveServer manager lineToken accessKey secretKey = receiveMessage
+  where receiveMessage :: Maybe T.Text -> ReceiveHook -> Handler NoContent
+        receiveMessage signature receiveHook =
+          do
+            let evs = Data.Receive.ReceiveHook.events receiveHook
+                evHead = head evs
+                src = Data.Receive.EventData.source evHead
+                message = Data.Receive.EventData.message evHead
+            msg <- liftIO $ executeScript message manager accessKey secretKey
+            liftIO $ executeReply manager lineToken receiveHook msg
+            return NoContent
