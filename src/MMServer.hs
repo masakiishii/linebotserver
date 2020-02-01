@@ -7,6 +7,8 @@ import Control.Concurrent
 import Network.Wai.Handler.Warp
 import Servant
 import System.Process
+import System.Process.Internals
+import qualified System.Posix.Signals as PS
 import System.IO
 import qualified Data.Text as T
 import qualified Data.ByteString.Lazy as BL
@@ -123,7 +125,7 @@ sendPosition :: Manager -> T.Text -> String -> T.Text -> BS.ByteString -> IO ()
 sendPosition manager lineToken userId accessKey secretKey =
   flip fix (0 :: Int) $ \loop i ->
   when True $ do
-    threadDelay (5 * 60 * 1000 * 1000)
+    threadDelay (120 * 60 * 1000 * 1000)
     req <- buildCollateralReq accessKey secretKey
     ret <- executeBit manager $ req
     case ret of
@@ -144,8 +146,13 @@ sendPosition manager lineToken userId accessKey secretKey =
 
 checkProcess :: String -> IO String
 checkProcess shellPath = do
-  (_, Just hout, _, _) <- createProcess (proc shellPath []) { std_out = CreatePipe }
+  (_, Just hout, _, handle) <- createProcess (proc shellPath []) { std_out = CreatePipe }
+  exitCode <- waitForProcess handle
   result <- hGetContents hout
+  withProcessHandle handle $ \ph_ ->
+    case ph_ of
+      OpenHandle pid -> PS.signalProcess PS.sigKILL pid
+      ClosedHandle _ -> return () 
   return $ filter (/= '\n') result
 
 readBaseCollateral :: IO Integer

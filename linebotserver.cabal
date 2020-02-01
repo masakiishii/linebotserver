@@ -66,6 +66,7 @@ library
               , vector
               , network
               , process
+              , unix
   default-language: Haskell2010
 
 executable linebotserver-exe
@@ -99,6 +100,7 @@ executable linebotserver-exe
               , vector
               , network
               , process
+              , unix
   default-language: Haskell2010
 
 test-suite linebotserver-test
@@ -133,4 +135,5 @@ test-suite linebotserver-test
               , vector
               , network
               , process
+              , unix
   default-language: Haskell2010
